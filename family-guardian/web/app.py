@@ -1,0 +1,258 @@
+"""FastAPI web demo: browser uploads JPEG frames, server runs the pipeline.
+
+브라우저가 `getUserMedia` 로 캡쳐한 프레임을 ~100ms 마다 POST /frame 으로 보내면,
+서버가 기존 ``PoseDetector → FallDetector → (BabyRecorder|IncidentRecorder)`` 흐름에
+그대로 흘려 넣고 상태를 JSON 으로 돌려준다.
+
+Railway 같은 ephemeral 컨테이너에서 돌리는 게 전제다 — 녹화 파일은 영구 저장
+되지 않으니, 알림 영상을 보관하려면 ``CLOUD_UPLOAD_ENABLED=true`` 로 S3 업로드를
+켜야 한다.
+"""
+from __future__ import annotations
+
+import asyncio
+import time
+from pathlib import Path
+from typing import Optional
+
+import cv2
+import numpy as np
+from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+import config
+from core.breathing_detector import BreathingDetector
+from core.event_state import State
+from core.fall_detector import FallDetector
+from core.incident_recorder import IncidentRecorder
+from core.logger import get_logger
+from core.pose_detector import PoseDetector
+from core.recorder import BabyRecorder
+from notifiers import build_notifier
+from storage.cloud_uploader import CloudUploader
+
+log = get_logger(__name__)
+
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
+class Pipeline:
+    """Per-process singleton wrapping the existing detection pipeline."""
+
+    def __init__(self) -> None:
+        self.pose = PoseDetector()
+        self.fall = FallDetector(frame_height=config.FRAME_HEIGHT)
+        self.notifier = build_notifier()
+        self.uploader = CloudUploader()
+        self.lock = asyncio.Lock()
+
+        self.mode: str = "elder"
+        self.baby_rec: Optional[BabyRecorder] = None
+        self.incident_rec: Optional[IncidentRecorder] = None
+        self.breathing: Optional[BreathingDetector] = None
+        self.prev_state: State = State.NORMAL
+        self.last_confirmed_path: Optional[str] = None
+        self.last_alert: Optional[str] = None
+        self.last_alert_at: float = 0.0
+        self.last_result: dict = {}
+        self.frame_count: int = 0
+
+        initial = config.MODE if config.MODE in ("elder", "baby") else "elder"
+        self._configure_mode(initial)
+
+    def _on_confirmed(self, path: str) -> None:
+        self.last_confirmed_path = path
+        self.uploader.upload_async(path)
+
+    def _configure_mode(self, mode: str) -> None:
+        if self.baby_rec is not None:
+            try:
+                self.baby_rec.close()
+            except Exception:  # noqa: BLE001
+                log.exception("baby_rec.close failed during mode switch")
+            self.baby_rec = None
+        if self.incident_rec is not None:
+            try:
+                self.incident_rec.close()
+            except Exception:  # noqa: BLE001
+                log.exception("incident_rec.close failed during mode switch")
+            self.incident_rec = None
+        self.breathing = None
+
+        self.mode = mode
+        if mode == "baby":
+            try:
+                self.baby_rec = BabyRecorder()
+            except Exception:  # noqa: BLE001
+                log.exception("BabyRecorder init failed (continuing without disk recording)")
+            self.breathing = BreathingDetector()
+        else:
+            try:
+                self.incident_rec = IncidentRecorder(on_confirmed=self._on_confirmed)
+            except Exception:  # noqa: BLE001
+                log.exception("IncidentRecorder init failed (continuing without disk recording)")
+
+        # Reset state machine so a mode flip doesn't carry stale history
+        self.fall = FallDetector(frame_height=config.FRAME_HEIGHT)
+        self.prev_state = State.NORMAL
+        log.info("Pipeline mode set to %s", mode)
+
+    async def process(self, frame_bgr: np.ndarray) -> dict:
+        async with self.lock:
+            return await asyncio.to_thread(self._process_sync, frame_bgr)
+
+    def _process_sync(self, frame_bgr: np.ndarray) -> dict:
+        now = time.time()
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+        try:
+            pose = self.pose.process(frame_rgb, now)
+        except Exception:  # noqa: BLE001
+            log.exception("pose_detector.process failed")
+            pose = None
+
+        alert_msg = self.fall.update(pose)
+        new_state = self.fall.state
+        torso_deg = (
+            pose.torso_angle_deg() if pose is not None and pose.visibility_ok else None
+        )
+
+        bpm: Optional[float] = None
+        bpm_conf: Optional[float] = None
+        apnea_msg: Optional[str] = None
+
+        if self.mode == "baby":
+            if self.baby_rec is not None:
+                try:
+                    self.baby_rec.write(frame_bgr, now)
+                except Exception:  # noqa: BLE001
+                    log.exception("baby_rec.write failed")
+            if self.breathing is not None:
+                try:
+                    br = self.breathing.update(frame_bgr, pose)
+                    bpm = br.bpm
+                    bpm_conf = br.confidence
+                    apnea_msg = self.breathing.build_alert(now)
+                except Exception:  # noqa: BLE001
+                    log.exception("breathing.update failed")
+                if apnea_msg:
+                    try:
+                        self.notifier.send(apnea_msg, video_path=None)
+                    except Exception:  # noqa: BLE001
+                        log.exception("apnea notifier.send failed")
+        elif self.incident_rec is not None:
+            try:
+                if (
+                    self.prev_state != State.SUSPECTED_FALL
+                    and new_state == State.SUSPECTED_FALL
+                ):
+                    self.incident_rec.start_on_suspected(now)
+                elif (
+                    self.prev_state == State.SUSPECTED_FALL
+                    and new_state == State.NORMAL
+                ):
+                    self.incident_rec.discard()
+                elif (
+                    self.prev_state != State.CONFIRMED_FALL
+                    and new_state == State.CONFIRMED_FALL
+                ):
+                    saved = self.incident_rec.confirm()
+                    if saved:
+                        self.last_confirmed_path = saved
+
+                if self.incident_rec.state.value == "IDLE":
+                    self.incident_rec.feed_idle_frame(frame_bgr, now)
+                else:
+                    self.incident_rec.feed_recording_frame(frame_bgr, now)
+            except Exception:  # noqa: BLE001
+                log.exception("incident_rec update failed")
+
+        if alert_msg:
+            try:
+                self.notifier.send(alert_msg, video_path=self.last_confirmed_path)
+            except Exception:  # noqa: BLE001
+                log.exception("fall notifier.send failed")
+            self.last_alert = alert_msg
+            self.last_alert_at = now
+            self.last_confirmed_path = None
+        elif apnea_msg:
+            self.last_alert = apnea_msg
+            self.last_alert_at = now
+
+        self.prev_state = new_state
+        self.frame_count += 1
+        self.last_result = {
+            "mode": self.mode,
+            "state": new_state.value,
+            "torso_deg": torso_deg,
+            "bpm": bpm,
+            "bpm_confidence": bpm_conf,
+            "last_alert": self.last_alert,
+            "last_alert_at": self.last_alert_at,
+            "frame_count": self.frame_count,
+            "ts": now,
+        }
+        return self.last_result
+
+
+_pipeline: Optional[Pipeline] = None
+
+
+def get_pipeline() -> Pipeline:
+    global _pipeline
+    if _pipeline is None:
+        config.ensure_dirs()
+        _pipeline = Pipeline()
+    return _pipeline
+
+
+app = FastAPI(title="family-guardian web demo")
+app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+
+@app.on_event("startup")
+async def _startup() -> None:
+    log.info("Web demo starting up")
+    get_pipeline()
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> HTMLResponse:
+    html_path = _STATIC_DIR / "index.html"
+    return HTMLResponse(html_path.read_text(encoding="utf-8"))
+
+
+@app.get("/healthz")
+async def healthz() -> dict:
+    return {"ok": True, "mode": get_pipeline().mode}
+
+
+@app.get("/state")
+async def state() -> dict:
+    pipe = get_pipeline()
+    return pipe.last_result or {"mode": pipe.mode, "state": "NORMAL"}
+
+
+@app.post("/mode/{mode}")
+async def set_mode(mode: str) -> dict:
+    mode_l = mode.lower()
+    if mode_l not in ("elder", "baby"):
+        raise HTTPException(status_code=400, detail="mode must be 'elder' or 'baby'")
+    pipe = get_pipeline()
+    async with pipe.lock:
+        pipe._configure_mode(mode_l)
+    return {"ok": True, "mode": mode_l}
+
+
+@app.post("/frame")
+async def frame(file: UploadFile = File(...)) -> JSONResponse:
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty frame")
+    arr = np.frombuffer(data, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="could not decode frame")
+    result = await get_pipeline().process(img)
+    return JSONResponse(result)

@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>family-guardian · web demo</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --panel: #181b22;
+      --line: #262a33;
+      --fg: #e6e8ee;
+      --muted: #8b93a3;
+      --accent: #4f8cff;
+      --green: #2db66d;
+      --orange: #e69138;
+      --red: #d9534f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg); color: var(--fg);
+      margin: 0; padding: 16px;
+    }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    .disclaimer {
+      color: var(--muted); font-size: 12px; margin-bottom: 16px;
+      max-width: 720px;
+    }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+    .panel {
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: 8px; padding: 14px;
+    }
+    video, canvas {
+      background: #000; border-radius: 6px; max-width: 100%;
+      display: block;
+    }
+    button {
+      padding: 8px 14px; background: #232732; border: 1px solid var(--line);
+      color: var(--fg); border-radius: 6px; cursor: pointer; font-size: 13px;
+      margin-right: 6px; margin-top: 8px;
+    }
+    button:hover { border-color: #3b4255; }
+    button.active { background: var(--accent); border-color: var(--accent); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .badge {
+      display: inline-block; padding: 3px 8px; border-radius: 4px;
+      font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+    }
+    .badge-NORMAL { background: var(--green); }
+    .badge-SUSPECTED_FALL { background: var(--orange); }
+    .badge-CONFIRMED_FALL { background: var(--red); }
+    .stat { font-size: 14px; line-height: 1.9; min-width: 280px; }
+    .stat .k {
+      color: var(--muted); display: inline-block; min-width: 110px;
+    }
+    .alert {
+      background: #3a1b1c; color: #ffcbcb; border: 1px solid #6a2a2c;
+      border-radius: 6px; padding: 10px 12px; margin-top: 12px;
+      white-space: pre-wrap; font-size: 13px;
+    }
+    .alert.hidden { display: none; }
+    .footer { color: var(--muted); font-size: 11px; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <h1>family-guardian · web demo</h1>
+  <div class="disclaimer">
+    ⚠️ 안전 모니터링 보조 데모입니다. 의료기기가 아니며 보호자의 직접 감독을
+    대체하지 않습니다. 호흡 추정은 카메라 기반 참고값으로 ±5~10 BPM 오차가 정상입니다.
+  </div>
+
+  <div class="row">
+    <div class="panel">
+      <video id="vid" width="480" height="360" autoplay playsinline muted></video>
+      <canvas id="cv" width="480" height="360" style="display:none"></canvas>
+      <div>
+        <button id="btn-start">카메라 시작</button>
+        <button id="btn-elder" class="active">elder</button>
+        <button id="btn-baby">baby</button>
+      </div>
+    </div>
+
+    <div class="panel stat">
+      <div><span class="k">Mode</span><span id="m-mode">-</span></div>
+      <div><span class="k">State</span><span id="m-state" class="badge badge-NORMAL">NORMAL</span></div>
+      <div><span class="k">Torso angle</span><span id="m-torso">-</span></div>
+      <div><span class="k">BPM</span><span id="m-bpm">-</span></div>
+      <div><span class="k">Confidence</span><span id="m-conf">-</span></div>
+      <div><span class="k">Frames sent</span><span id="m-frames">0</span></div>
+      <div><span class="k">Sample FPS</span><span id="m-fps">0</span></div>
+      <div id="alertbox" class="alert hidden"></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Endpoints — <code>POST /frame</code> (JPEG), <code>POST /mode/{elder|baby}</code>,
+    <code>GET /state</code>, <code>GET /healthz</code>
+  </div>
+
+<script>
+(() => {
+  const vid = document.getElementById('vid');
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const btnStart = document.getElementById('btn-start');
+  const btnElder = document.getElementById('btn-elder');
+  const btnBaby  = document.getElementById('btn-baby');
+  const els = {
+    mode:   document.getElementById('m-mode'),
+    state:  document.getElementById('m-state'),
+    torso:  document.getElementById('m-torso'),
+    bpm:    document.getElementById('m-bpm'),
+    conf:   document.getElementById('m-conf'),
+    frames: document.getElementById('m-frames'),
+    fps:    document.getElementById('m-fps'),
+    alert:  document.getElementById('alertbox'),
+  };
+
+  let streaming = false;
+  let inflight = false;
+  let sent = 0;
+  let windowStart = performance.now();
+  let windowFrames = 0;
+  let lastAlertShown = '';
+
+  btnStart.addEventListener('click', async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 480 }, height: { ideal: 360 } },
+        audio: false,
+      });
+      vid.srcObject = stream;
+      await vid.play();
+      streaming = true;
+      btnStart.disabled = true;
+      btnStart.textContent = '스트리밍 중';
+      loop();
+    } catch (e) {
+      alert('카메라 접근 실패: ' + e.message + '\n\nHTTPS 또는 localhost 환경에서만 동작합니다.');
+    }
+  });
+
+  async function setMode(m, btn) {
+    [btnElder, btnBaby].forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    try {
+      await fetch('/mode/' + m, { method: 'POST' });
+    } catch (e) { /* network blip - silent */ }
+  }
+  btnElder.addEventListener('click', () => setMode('elder', btnElder));
+  btnBaby.addEventListener('click',  () => setMode('baby',  btnBaby));
+
+  async function sendFrame() {
+    if (inflight || !streaming || vid.videoWidth === 0) return;
+    inflight = true;
+    try {
+      ctx.drawImage(vid, 0, 0, cv.width, cv.height);
+      const blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', 0.7));
+      if (!blob) return;
+      const fd = new FormData();
+      fd.append('file', blob, 'frame.jpg');
+      const r = await fetch('/frame', { method: 'POST', body: fd });
+      if (r.ok) {
+        const j = await r.json();
+        renderState(j);
+        sent++;
+        windowFrames++;
+        els.frames.textContent = sent;
+        const now = performance.now();
+        if (now - windowStart >= 1000) {
+          els.fps.textContent = (windowFrames * 1000 / (now - windowStart)).toFixed(1);
+          windowFrames = 0;
+          windowStart = now;
+        }
+      }
+    } catch (e) {
+      // network blip - silent
+    } finally {
+      inflight = false;
+    }
+  }
+
+  function renderState(j) {
+    els.mode.textContent = j.mode || '-';
+    els.state.textContent = j.state || '-';
+    els.state.className = 'badge badge-' + (j.state || 'NORMAL');
+    els.torso.textContent = (j.torso_deg == null) ? '-' : (j.torso_deg.toFixed(1) + '°');
+    els.bpm.textContent = (j.bpm == null) ? '-' : j.bpm.toFixed(1);
+    els.conf.textContent = (j.bpm_confidence == null) ? '-' : j.bpm_confidence.toFixed(2);
+    if (j.last_alert && j.last_alert !== lastAlertShown) {
+      lastAlertShown = j.last_alert;
+      els.alert.textContent = j.last_alert;
+      els.alert.classList.remove('hidden');
+    }
+  }
+
+  async function loop() {
+    while (streaming) {
+      await sendFrame();
+      await new Promise(r => setTimeout(r, 150));
+    }
+  }
+})();
+</script>
+</body>
+</html>

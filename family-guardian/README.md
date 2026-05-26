@@ -74,6 +74,51 @@ TELEGRAM_CHAT_ID=987654321
 
 ---
 
+## 🌐 웹 데모 (Railway 배포)
+
+브라우저에서 카메라를 켜고 프레임을 서버에 업로드하면, 서버가 기존 파이프라인을
+그대로 돌려 결과를 JSON 으로 돌려준다. Railway 같은 ephemeral 컨테이너용 구성이다.
+
+### 로컬에서 먼저 띄워보기
+
+```bash
+. .venv/bin/activate
+uvicorn web.app:app --host 0.0.0.0 --port 8000
+```
+
+브라우저로 http://localhost:8000 접속 → "카메라 시작" 버튼.
+
+### Railway 배포
+
+1. Railway 콘솔에서 **New Project → Deploy from GitHub repo** 선택, 본 리포지토리 연결.
+2. 서비스 **Settings → Root Directory** 를 `family-guardian` 으로 지정
+   (Dockerfile / railway.json 이 이 폴더 안에 있음).
+3. **Variables** 탭에서 원하는 환경변수 설정:
+   - `MODE` (기본 `elder`)
+   - 텔레그램 사용 시 `NOTIFIER=telegram`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+   - S3 보관 시 `CLOUD_UPLOAD_ENABLED=true`, `S3_BUCKET`, AWS 자격증명
+4. 빌드가 완료되면 자동 생성된 도메인(`*.up.railway.app`) 으로 접속.
+
+### 엔드포인트
+
+| Method | Path | 설명 |
+|--------|------|------|
+| GET    | `/`             | 데모 HTML (브라우저 카메라 → 프레임 업로드) |
+| GET    | `/healthz`      | Railway healthcheck |
+| GET    | `/state`        | 최신 분석 상태 (mode, state, torso_deg, bpm 등) |
+| POST   | `/mode/{elder\|baby}` | 모드 전환 (recorder 재구성) |
+| POST   | `/frame`        | JPEG 1장(`file=@frame.jpg`) → 분석 결과 JSON |
+
+### 알려진 한계 (Railway 환경)
+
+- **카메라 권한**: 브라우저 `getUserMedia` 는 HTTPS / localhost 에서만 동작.
+  Railway 도메인은 자동 HTTPS 이므로 OK.
+- **녹화 파일**: 컨테이너 디스크는 ephemeral. 영구 보관하려면 S3 업로드 활성화 필수.
+- **단일 세션**: 데모는 단일 파이프라인 인스턴스로 다중 사용자 분리 없음.
+  여러 사람이 동시에 접속하면 마지막 사람의 프레임 상태가 공유된다.
+
+---
+
 ## 24시간 운영
 
 ### Linux / macOS — `run_forever.sh`
