@@ -197,24 +197,30 @@ class Pipeline:
 
 
 _pipeline: Optional[Pipeline] = None
+_pipeline_lock = asyncio.Lock()
 
 
-def get_pipeline() -> Pipeline:
+async def get_pipeline_async() -> Pipeline:
+    """Lazy-init the pipeline. MediaPipe load is offloaded to a worker thread
+    so the event loop (and /healthz) stays responsive during startup."""
     global _pipeline
-    if _pipeline is None:
-        config.ensure_dirs()
-        _pipeline = Pipeline()
+    if _pipeline is not None:
+        return _pipeline
+    async with _pipeline_lock:
+        if _pipeline is None:
+            log.info("Initializing pipeline (lazy)")
+            _pipeline = await asyncio.to_thread(_build_pipeline)
+            log.info("Pipeline ready")
     return _pipeline
+
+
+def _build_pipeline() -> Pipeline:
+    config.ensure_dirs()
+    return Pipeline()
 
 
 app = FastAPI(title="family-guardian web demo")
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
-
-
-@app.on_event("startup")
-async def _startup() -> None:
-    log.info("Web demo starting up")
-    get_pipeline()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -225,13 +231,16 @@ async def index() -> HTMLResponse:
 
 @app.get("/healthz")
 async def healthz() -> dict:
-    return {"ok": True, "mode": get_pipeline().mode}
+    # Must NOT touch the pipeline: Railway's healthcheck has to succeed
+    # before MediaPipe finishes its first-load (which can take 10+ seconds).
+    return {"ok": True, "pipeline_ready": _pipeline is not None}
 
 
 @app.get("/state")
 async def state() -> dict:
-    pipe = get_pipeline()
-    return pipe.last_result or {"mode": pipe.mode, "state": "NORMAL"}
+    if _pipeline is None:
+        return {"mode": config.MODE, "state": "NORMAL", "pipeline_ready": False}
+    return _pipeline.last_result or {"mode": _pipeline.mode, "state": "NORMAL"}
 
 
 @app.post("/mode/{mode}")
@@ -239,7 +248,7 @@ async def set_mode(mode: str) -> dict:
     mode_l = mode.lower()
     if mode_l not in ("elder", "baby"):
         raise HTTPException(status_code=400, detail="mode must be 'elder' or 'baby'")
-    pipe = get_pipeline()
+    pipe = await get_pipeline_async()
     async with pipe.lock:
         pipe._configure_mode(mode_l)
     return {"ok": True, "mode": mode_l}
@@ -254,5 +263,6 @@ async def frame(file: UploadFile = File(...)) -> JSONResponse:
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     if img is None:
         raise HTTPException(status_code=400, detail="could not decode frame")
-    result = await get_pipeline().process(img)
+    pipe = await get_pipeline_async()
+    result = await pipe.process(img)
     return JSONResponse(result)
