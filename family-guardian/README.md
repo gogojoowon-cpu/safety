@@ -91,13 +91,13 @@ uvicorn web.app:app --host 0.0.0.0 --port 8000
 ### Railway 배포
 
 1. Railway 콘솔에서 **New Project → Deploy from GitHub repo** 선택, 본 리포지토리 연결.
-2. 서비스 **Settings → Root Directory** 를 `family-guardian` 으로 지정
-   (Dockerfile / railway.json 이 이 폴더 안에 있음).
-3. **Variables** 탭에서 원하는 환경변수 설정:
+   리포 **루트**의 `Dockerfile` + `railway.json` 을 그대로 사용하므로 별도 설정 불필요.
+2. **Variables** 탭에서 원하는 환경변수 설정:
    - `MODE` (기본 `elder`)
    - 텔레그램 사용 시 `NOTIFIER=telegram`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
    - S3 보관 시 `CLOUD_UPLOAD_ENABLED=true`, `S3_BUCKET`, AWS 자격증명
-4. 빌드가 완료되면 자동 생성된 도메인(`*.up.railway.app`) 으로 접속.
+3. 빌드가 완료되면 자동 생성된 도메인(`*.up.railway.app`) 으로 접속.
+   첫 startup 은 MediaPipe 모델 로딩으로 5~10초 걸린다.
 
 ### 엔드포인트
 
