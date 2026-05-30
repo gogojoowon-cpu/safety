@@ -3,122 +3,274 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>family-guardian · web demo</title>
+  <title>Family Guardian · 웹 데모</title>
   <style>
     :root {
       --bg: #0f1115;
       --panel: #181b22;
-      --line: #262a33;
+      --panel-2: #1f232c;
+      --line: #2a2f3a;
       --fg: #e6e8ee;
       --muted: #8b93a3;
       --accent: #4f8cff;
+      --accent-dim: #3a6ed1;
       --green: #2db66d;
       --orange: #e69138;
       --red: #d9534f;
+      --blue: #4f8cff;
     }
     * { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       background: var(--bg); color: var(--fg);
       margin: 0; padding: 16px;
+      line-height: 1.5;
     }
-    h1 { font-size: 18px; margin: 0 0 4px; }
+    h1 { font-size: 20px; margin: 0; }
+    h2 { font-size: 14px; margin: 0 0 10px; color: var(--muted); font-weight: 600;
+         text-transform: uppercase; letter-spacing: 0.05em; }
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; flex-wrap: wrap; margin-bottom: 6px;
+    }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; background: var(--panel); border-radius: 999px;
+      border: 1px solid var(--line); font-size: 12px;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted); transition: background 0.2s;
+    }
+    .dot.live  { background: var(--green); box-shadow: 0 0 8px var(--green); }
+    .dot.warn  { background: var(--orange); }
+    .dot.error { background: var(--red); }
     .disclaimer {
-      color: var(--muted); font-size: 12px; margin-bottom: 16px;
-      max-width: 720px;
+      color: var(--muted); font-size: 12px; margin: 10px 0 18px;
+      max-width: 760px;
     }
     .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
     .panel {
       background: var(--panel); border: 1px solid var(--line);
-      border-radius: 8px; padding: 14px;
+      border-radius: 10px; padding: 16px;
     }
-    video, canvas {
-      background: #000; border-radius: 6px; max-width: 100%;
-      display: block;
+
+    /* --- camera / video --- */
+    .video-wrap {
+      position: relative;
+      width: 480px; max-width: 100%;
+      background: #000; border-radius: 8px; overflow: hidden;
     }
+    .video-wrap video {
+      display: block; width: 100%; height: auto;
+      background: #000;
+    }
+    .video-wrap canvas#overlay {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      cursor: crosshair;
+      /* MUST stay transparent — no background-color or the video underneath
+         disappears (this was the camera-not-showing bug). */
+    }
+    canvas#cv { display: none; }
+
+    /* --- buttons --- */
     button {
-      padding: 8px 14px; background: #232732; border: 1px solid var(--line);
+      padding: 8px 14px; background: var(--panel-2); border: 1px solid var(--line);
       color: var(--fg); border-radius: 6px; cursor: pointer; font-size: 13px;
-      margin-right: 6px; margin-top: 8px;
+      margin: 4px 4px 0 0;
+      transition: background 0.15s, border-color 0.15s;
     }
-    button:hover { border-color: #3b4255; }
-    button.active { background: var(--accent); border-color: var(--accent); }
+    button:hover:not(:disabled) { border-color: #455066; background: #262b36; }
+    button.active { background: var(--accent); border-color: var(--accent); color: white; }
     button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.primary {
+      background: var(--accent); border-color: var(--accent); color: white;
+      font-weight: 600; padding: 10px 18px; font-size: 14px;
+    }
+    button.primary:hover:not(:disabled) { background: var(--accent-dim); border-color: var(--accent-dim); }
+    button.ghost { background: transparent; }
+    button .icon { font-size: 15px; }
+
+    /* --- onboarding steps --- */
+    .steps {
+      display: flex; gap: 8px; align-items: center; margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .step {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 12px; border-radius: 999px;
+      background: var(--panel); border: 1px solid var(--line);
+      font-size: 12px; color: var(--muted);
+    }
+    .step.done   { color: var(--green); border-color: rgba(45, 182, 109, 0.4); }
+    .step.active { color: var(--fg);    border-color: var(--accent); }
+    .step .num {
+      width: 18px; height: 18px; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--panel-2); font-size: 11px; font-weight: 700;
+    }
+    .step.done .num   { background: var(--green);  color: white; }
+    .step.active .num { background: var(--accent); color: white; }
+
+    /* --- stats panel --- */
+    .stat-grid {
+      display: grid; grid-template-columns: max-content 1fr;
+      gap: 6px 14px; font-size: 13px; min-width: 260px;
+    }
+    .stat-grid .k { color: var(--muted); }
     .badge {
-      display: inline-block; padding: 3px 8px; border-radius: 4px;
-      font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.03em;
     }
-    .badge-NORMAL,
-    .badge-SAFE { background: var(--green); }
-    .badge-SUSPECTED_FALL,
-    .badge-WARNING { background: var(--orange); }
-    .badge-CONFIRMED_FALL,
-    .badge-DANGER { background: var(--red); }
-    .stat { font-size: 14px; line-height: 1.9; min-width: 280px; }
-    .stat .k {
-      color: var(--muted); display: inline-block; min-width: 110px;
+    .badge-NORMAL, .badge-SAFE                  { background: var(--green);  color: white; }
+    .badge-SUSPECTED_FALL, .badge-WARNING       { background: var(--orange); color: white; }
+    .badge-CONFIRMED_FALL, .badge-DANGER        { background: var(--red);    color: white; }
+    .experimental {
+      font-size: 10px; padding: 1px 5px; border-radius: 3px;
+      background: rgba(230, 145, 56, 0.15); color: var(--orange);
+      border: 1px solid rgba(230, 145, 56, 0.4);
+      margin-left: 4px; vertical-align: middle;
     }
-    .alert {
-      background: #3a1b1c; color: #ffcbcb; border: 1px solid #6a2a2c;
-      border-radius: 6px; padding: 10px 12px; margin-top: 12px;
-      white-space: pre-wrap; font-size: 13px;
+    .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+    /* --- toast --- */
+    #toast {
+      position: fixed; top: 20px; right: 20px; max-width: 380px;
+      padding: 14px 16px; border-radius: 8px;
+      background: var(--red); color: white;
+      font-size: 14px; box-shadow: 0 6px 24px rgba(0,0,0,0.4);
+      transform: translateX(420px); transition: transform 0.3s ease;
+      z-index: 1000; white-space: pre-wrap;
     }
-    .alert.hidden { display: none; }
-    .footer { color: var(--muted); font-size: 11px; margin-top: 18px; }
+    #toast.show { transform: translateX(0); }
+    #toast.warn { background: var(--orange); }
+    #toast.info { background: var(--accent); }
+
+    /* --- alert history --- */
+    .alert-list {
+      list-style: none; padding: 0; margin: 0;
+      max-height: 320px; overflow-y: auto;
+    }
+    .alert-list li {
+      margin: 6px 0; padding: 8px 10px;
+      border-left: 3px solid var(--muted);
+      background: var(--panel-2); border-radius: 4px;
+      font-size: 12px;
+    }
+    .alert-list .meta {
+      font-weight: 700; font-size: 10px; margin-bottom: 2px;
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .alert-list .body { white-space: pre-wrap; opacity: 0.9; }
+
+    .footer { color: var(--muted); font-size: 11px; margin-top: 24px; }
+    code { background: var(--panel-2); padding: 1px 6px; border-radius: 3px; font-size: 11px; }
   </style>
 </head>
 <body>
-  <h1>family-guardian · web demo</h1>
-  <div class="disclaimer">
-    ⚠️ 안전 모니터링 보조 데모입니다. 의료기기가 아니며 보호자의 직접 감독을
-    대체하지 않습니다. 호흡 추정은 카메라 기반 참고값으로 ±5~10 BPM 오차가 정상입니다.
-  </div>
 
-  <div class="row">
-    <div class="panel">
-      <div style="position:relative; width:480px; max-width:100%">
-        <video id="vid" width="480" height="360" autoplay playsinline muted></video>
-        <canvas id="overlay" width="480" height="360"
-                style="position:absolute; inset:0; cursor:crosshair"></canvas>
-      </div>
-      <canvas id="cv" width="480" height="360" style="display:none"></canvas>
-      <div>
-        <button id="btn-start">카메라 시작</button>
-        <button id="btn-elder" class="active">elder</button>
-        <button id="btn-baby">baby</button>
-      </div>
-      <div style="margin-top:6px">
-        <button id="btn-set-warning">WARNING 라인 설정</button>
-        <button id="btn-set-danger">DANGER 라인 설정</button>
-        <span id="calib-hint" style="color:var(--muted); font-size:12px; margin-left:6px"></span>
-      </div>
+<div class="header">
+  <h1>👨‍👩‍👧 Family Guardian <span style="color:var(--muted); font-weight:400; font-size:14px;">웹 데모</span></h1>
+  <div class="status-pill">
+    <span class="dot" id="status-dot"></span>
+    <span id="status-text">대기 중</span>
+  </div>
+</div>
+
+<div class="disclaimer">
+  안전 모니터링 <b>보조</b> 데모입니다. 의료기기가 아니며 보호자의 직접 감독을 대체하지 않습니다.
+  심박·호흡 추정은 카메라 기반 rPPG 추정치로, 일반 웹캠 + 가변 조명에서는
+  ±10~15 BPM 오차가 정상이며 환경에 따라 측정이 잘 안 될 수 있습니다.
+</div>
+
+<div class="steps">
+  <div class="step active" id="step-1"><span class="num">1</span>카메라 시작</div>
+  <div class="step"        id="step-2"><span class="num">2</span>모드 선택</div>
+  <div class="step"        id="step-3"><span class="num">3</span>위험선 설정 <span style="color:var(--muted)">(선택)</span></div>
+  <div class="step"        id="step-4"><span class="num">4</span>모니터링 중</div>
+</div>
+
+<div class="row">
+
+  <!-- LEFT: video + controls -->
+  <div class="panel">
+    <h2>라이브 카메라</h2>
+    <div class="video-wrap" id="video-wrap">
+      <video id="vid" autoplay playsinline muted></video>
+      <canvas id="overlay" width="480" height="360"></canvas>
+    </div>
+    <canvas id="cv" width="480" height="360"></canvas>
+
+    <div style="margin-top:12px;">
+      <button id="btn-start" class="primary"><span class="icon">📷</span> 카메라 시작</button>
     </div>
 
-    <div class="panel stat">
-      <div><span class="k">Mode</span><span id="m-mode">-</span></div>
-      <div><span class="k">State</span><span id="m-state" class="badge badge-NORMAL">NORMAL</span></div>
-      <div><span class="k">Torso angle</span><span id="m-torso">-</span></div>
-      <div><span class="k">호흡 BPM</span><span id="m-bpm">-</span></div>
-      <div><span class="k">호흡 confidence</span><span id="m-conf">-</span></div>
-      <div><span class="k">심박 BPM</span><span id="m-hr">-</span></div>
-      <div><span class="k">심박 confidence</span><span id="m-hrconf">-</span></div>
-      <div><span class="k">얼굴 인식</span><span id="m-face">-</span></div>
-      <div><span class="k">예방 구역</span><span id="m-fpzone" class="badge badge-NORMAL">SAFE</span></div>
-      <div><span class="k">Frames sent</span><span id="m-frames">0</span></div>
-      <div><span class="k">Sample FPS</span><span id="m-fps">0</span></div>
-      <div id="alertbox" class="alert hidden"></div>
+    <div style="margin-top:14px;">
+      <h2 style="margin-bottom:6px;">모드</h2>
+      <button id="btn-elder" class="active"><span class="icon">👴</span> 어르신 (낙상)</button>
+      <button id="btn-baby"><span class="icon">👶</span> 아기 (호흡)</button>
     </div>
 
-    <div class="panel" style="min-width:280px">
-      <h3 style="margin:0 0 8px; font-size:14px;">Alert history</h3>
-      <ul id="alerts" style="list-style:none; padding:0; margin:0; max-height:360px; overflow-y:auto; font-size:12px;"></ul>
+    <div style="margin-top:14px;">
+      <h2 style="margin-bottom:6px;">위험선 (hip y-좌표 기준)</h2>
+      <button id="btn-set-warning"><span class="icon">⚠️</span> WARNING 라인</button>
+      <button id="btn-set-danger"><span class="icon">🚫</span> DANGER 라인</button>
+      <div class="hint" id="calib-hint">버튼을 누른 뒤 영상에서 원하는 높이를 클릭하세요.</div>
+    </div>
+
+    <div style="margin-top:14px;">
+      <h2 style="margin-bottom:6px;">테스트</h2>
+      <button id="btn-test-alert"><span class="icon">🧪</span> 테스트 알림</button>
+      <div class="hint">알림 채널(콘솔 / 텔레그램) 연결 확인용.</div>
     </div>
   </div>
 
-  <div class="footer">
-    Endpoints — <code>POST /frame</code> (JPEG), <code>POST /mode/{elder|baby}</code>,
-    <code>GET /state</code>, <code>GET /healthz</code>
+  <!-- MIDDLE: stats -->
+  <div class="panel">
+    <h2>실시간 상태</h2>
+    <div class="stat-grid">
+      <span class="k">모드</span><span id="m-mode">-</span>
+      <span class="k">낙상 상태</span><span><span id="m-state" class="badge badge-NORMAL">NORMAL</span></span>
+      <span class="k">예방 구역</span><span><span id="m-fpzone" class="badge badge-SAFE">SAFE</span></span>
+      <span class="k">몸통 각도</span><span id="m-torso">-</span>
+      <span class="k">얼굴 인식</span><span id="m-face">-</span>
+    </div>
+
+    <h2 style="margin-top:18px;">생체 신호 <span class="experimental">실험적 · rPPG</span></h2>
+    <div class="stat-grid">
+      <span class="k">호흡 BPM</span><span id="m-bpm">-</span>
+      <span class="k">호흡 신뢰도</span><span id="m-conf">-</span>
+      <span class="k">심박 BPM</span><span id="m-hr">-</span>
+      <span class="k">심박 신뢰도</span><span id="m-hrconf">-</span>
+    </div>
+
+    <h2 style="margin-top:18px;">처리</h2>
+    <div class="stat-grid">
+      <span class="k">전송 프레임</span><span id="m-frames">0</span>
+      <span class="k">샘플 FPS</span><span id="m-fps">0</span>
+    </div>
   </div>
+
+  <!-- RIGHT: alert history -->
+  <div class="panel" style="min-width:300px; flex:1; max-width:420px;">
+    <h2>알림 이력</h2>
+    <ul class="alert-list" id="alerts"></ul>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div class="footer">
+  Endpoints —
+  <code>POST /frame</code>,
+  <code>POST /mode/{elder|baby}</code>,
+  <code>POST /zone</code>,
+  <code>POST /test-alert</code>,
+  <code>GET /state</code>,
+  <code>GET /alerts</code>,
+  <code>GET /healthz</code>
+</div>
 
 <script>
 (() => {
@@ -127,9 +279,22 @@
   const ctx = cv.getContext('2d');
   const overlay = document.getElementById('overlay');
   const overlayCtx = overlay.getContext('2d');
-  const btnStart = document.getElementById('btn-start');
-  const btnElder = document.getElementById('btn-elder');
-  const btnBaby  = document.getElementById('btn-baby');
+  const btnStart      = document.getElementById('btn-start');
+  const btnElder      = document.getElementById('btn-elder');
+  const btnBaby       = document.getElementById('btn-baby');
+  const btnSetWarning = document.getElementById('btn-set-warning');
+  const btnSetDanger  = document.getElementById('btn-set-danger');
+  const btnTestAlert  = document.getElementById('btn-test-alert');
+  const calibHint     = document.getElementById('calib-hint');
+  const statusDot     = document.getElementById('status-dot');
+  const statusText    = document.getElementById('status-text');
+  const toast         = document.getElementById('toast');
+  const steps = {
+    1: document.getElementById('step-1'),
+    2: document.getElementById('step-2'),
+    3: document.getElementById('step-3'),
+    4: document.getElementById('step-4'),
+  };
   const els = {
     mode:   document.getElementById('m-mode'),
     state:  document.getElementById('m-state'),
@@ -142,7 +307,6 @@
     fpzone: document.getElementById('m-fpzone'),
     frames: document.getElementById('m-frames'),
     fps:    document.getElementById('m-fps'),
-    alert:  document.getElementById('alertbox'),
   };
 
   let streaming = false;
@@ -150,24 +314,36 @@
   let sent = 0;
   let windowStart = performance.now();
   let windowFrames = 0;
-  let lastAlertShown = '';
-
-  // Zone calibration state — null when not calibrating.
-  let calibTarget = null;            // 'warning' | 'danger' | null
+  let lastAlertKey = '';
+  let calibTarget = null;
   const pendingZones = { warning_y: null, danger_y: null };
-  const calibHint = document.getElementById('calib-hint');
-  const btnSetWarning = document.getElementById('btn-set-warning');
-  const btnSetDanger  = document.getElementById('btn-set-danger');
 
+  function setStep(n) {
+    Object.entries(steps).forEach(([k, el]) => {
+      el.classList.remove('active', 'done');
+      if (parseInt(k) < n) el.classList.add('done');
+      else if (parseInt(k) === n) el.classList.add('active');
+    });
+  }
+  function setStatus(text, state) {
+    statusText.textContent = text;
+    statusDot.className = 'dot' + (state ? ' ' + state : '');
+  }
+  function showToast(msg, kind) {
+    toast.textContent = msg;
+    toast.className = (kind ? kind : '') + ' show';
+    setTimeout(() => toast.classList.remove('show'), 6000);
+  }
+
+  // --- calibration ---
   function setCalibTarget(t) {
     calibTarget = t;
-    if (t === 'warning') calibHint.textContent = '비디오를 클릭해 WARNING 라인 지정';
-    else if (t === 'danger') calibHint.textContent = '비디오를 클릭해 DANGER 라인 지정';
-    else calibHint.textContent = '';
+    if (t === 'warning')     calibHint.textContent = '⚠️ 영상에서 WARNING 라인 높이를 클릭하세요.';
+    else if (t === 'danger') calibHint.textContent = '🚫 영상에서 DANGER 라인 높이를 클릭하세요.';
+    else                     calibHint.textContent = '버튼을 누른 뒤 영상에서 원하는 높이를 클릭하세요.';
     btnSetWarning.classList.toggle('active', t === 'warning');
     btnSetDanger.classList.toggle('active', t === 'danger');
   }
-
   btnSetWarning.addEventListener('click', () => setCalibTarget(calibTarget === 'warning' ? null : 'warning'));
   btnSetDanger.addEventListener('click',  () => setCalibTarget(calibTarget === 'danger'  ? null : 'danger'));
 
@@ -178,54 +354,122 @@
     if (calibTarget === 'warning') pendingZones.warning_y = y;
     else pendingZones.danger_y = y;
     setCalibTarget(null);
-
-    // Once both lines are set, push to the server.
-    if (pendingZones.warning_y != null && pendingZones.danger_y != null) {
-      if (pendingZones.warning_y >= pendingZones.danger_y) {
-        calibHint.textContent = '⚠️ WARNING 은 DANGER 보다 위(작은 y)에 있어야 합니다';
-        return;
-      }
-      try {
-        const r = await fetch('/zone', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(pendingZones),
-        });
-        if (r.ok) calibHint.textContent = '✓ 위험선 저장됨';
-        else calibHint.textContent = '저장 실패: ' + (await r.text());
-      } catch (err) {
-        calibHint.textContent = '저장 실패: ' + err.message;
-      }
-    }
+    await pushZonesIfReady();
   });
 
+  async function pushZonesIfReady() {
+    if (pendingZones.warning_y == null || pendingZones.danger_y == null) {
+      calibHint.textContent = pendingZones.warning_y == null
+        ? '✓ DANGER 저장됨. WARNING 라인도 지정해주세요.'
+        : '✓ WARNING 저장됨. DANGER 라인도 지정해주세요.';
+      return;
+    }
+    if (pendingZones.warning_y >= pendingZones.danger_y) {
+      calibHint.textContent = '⚠️ WARNING 은 DANGER 보다 위(작은 y)에 있어야 합니다. 다시 설정해 주세요.';
+      pendingZones.warning_y = null;
+      pendingZones.danger_y = null;
+      return;
+    }
+    try {
+      const r = await fetch('/zone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pendingZones),
+      });
+      if (r.ok) {
+        calibHint.textContent = '✓ 위험선 저장 완료.';
+        setStep(4);
+      } else {
+        calibHint.textContent = '저장 실패: ' + (await r.text());
+      }
+    } catch (err) {
+      calibHint.textContent = '저장 실패: ' + err.message;
+    }
+  }
+
+  // --- camera start (with autoplay fallback + clear error states) ---
   btnStart.addEventListener('click', async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus('이 브라우저는 getUserMedia 미지원', 'error');
+      showToast('이 브라우저에서는 카메라 접근을 지원하지 않습니다.', 'warn');
+      return;
+    }
+    setStatus('카메라 권한 요청 중...', 'warn');
+    btnStart.disabled = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 480 }, height: { ideal: 360 } },
+        video: {
+          width:  { ideal: 480 },
+          height: { ideal: 360 },
+          facingMode: 'user',
+        },
         audio: false,
       });
       vid.srcObject = stream;
-      await vid.play();
+
+      // Some browsers (notably mobile Safari) block autoplay even with
+      // muted+playsinline. Fall back to a one-shot click handler.
+      try {
+        await vid.play();
+      } catch (playErr) {
+        setStatus('영상을 한 번 더 탭/클릭해주세요', 'warn');
+        vid.addEventListener('click', () => vid.play().catch(()=>{}), { once: true });
+        return;
+      }
+
       streaming = true;
-      btnStart.disabled = true;
-      btnStart.textContent = '스트리밍 중';
+      btnStart.textContent = '✓ 스트리밍 중';
+      setStatus('카메라 연결됨', 'live');
+      setStep(2);
       loop();
     } catch (e) {
-      alert('카메라 접근 실패: ' + e.message + '\n\nHTTPS 또는 localhost 환경에서만 동작합니다.');
+      btnStart.disabled = false;
+      btnStart.textContent = '📷 다시 시도';
+      if (e.name === 'NotAllowedError') {
+        setStatus('카메라 권한 거부됨', 'error');
+        showToast('카메라 권한이 거부되었습니다.\n주소창의 자물쇠 아이콘에서 권한을 허용해주세요.', 'warn');
+      } else if (e.name === 'NotFoundError') {
+        setStatus('카메라를 찾을 수 없음', 'error');
+        showToast('연결된 카메라가 없습니다.', 'warn');
+      } else if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+        setStatus('HTTPS 필요', 'error');
+        showToast('카메라 접근은 HTTPS 또는 localhost 에서만 가능합니다.', 'warn');
+      } else {
+        setStatus('카메라 오류', 'error');
+        showToast('카메라 오류: ' + e.message, 'warn');
+      }
     }
   });
 
+  // --- mode switch ---
   async function setMode(m, btn) {
     [btnElder, btnBaby].forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    try {
-      await fetch('/mode/' + m, { method: 'POST' });
-    } catch (e) { /* network blip - silent */ }
+    if (streaming) setStep(3);
+    try { await fetch('/mode/' + m, { method: 'POST' }); } catch { /* silent */ }
   }
   btnElder.addEventListener('click', () => setMode('elder', btnElder));
   btnBaby.addEventListener('click',  () => setMode('baby',  btnBaby));
 
+  // --- test alert ---
+  btnTestAlert.addEventListener('click', async () => {
+    btnTestAlert.disabled = true;
+    try {
+      const r = await fetch('/test-alert', { method: 'POST' });
+      if (r.ok) {
+        showToast('🧪 테스트 알림 발송됨. 이력 패널과 알림 채널을 확인하세요.', 'info');
+        refreshAlerts();
+      } else {
+        showToast('테스트 알림 실패: HTTP ' + r.status, 'warn');
+      }
+    } catch (e) {
+      showToast('테스트 알림 실패: ' + e.message, 'warn');
+    } finally {
+      btnTestAlert.disabled = false;
+    }
+  });
+
+  // --- frame upload loop ---
   async function sendFrame() {
     if (inflight || !streaming || vid.videoWidth === 0) return;
     inflight = true;
@@ -248,39 +492,83 @@
           windowFrames = 0;
           windowStart = now;
         }
+        if (statusDot.className.indexOf('live') === -1) setStatus('카메라 연결됨', 'live');
+      } else {
+        setStatus('서버 응답 오류 ' + r.status, 'warn');
       }
     } catch (e) {
-      // network blip - silent
+      setStatus('서버 연결 끊김', 'warn');
     } finally {
       inflight = false;
     }
   }
 
   function renderState(j) {
-    els.mode.textContent = j.mode || '-';
-    els.state.textContent = j.state || '-';
-    els.state.className = 'badge badge-' + (j.state || 'NORMAL');
-    els.torso.textContent = (j.torso_deg == null) ? '-' : (j.torso_deg.toFixed(1) + '°');
-    els.bpm.textContent = (j.bpm == null) ? '-' : j.bpm.toFixed(1);
-    els.conf.textContent = (j.bpm_confidence == null) ? '-' : j.bpm_confidence.toFixed(2);
-    els.hr.textContent = (j.hr_bpm == null) ? '-' : j.hr_bpm.toFixed(1);
+    els.mode.textContent   = j.mode === 'baby' ? '👶 baby' : '👴 elder';
+    els.state.textContent  = j.state || '-';
+    els.state.className    = 'badge badge-' + (j.state || 'NORMAL');
+    els.torso.textContent  = (j.torso_deg == null) ? '-' : (j.torso_deg.toFixed(1) + '°');
+    els.bpm.textContent    = (j.bpm == null) ? '— (10초 누적 중)' : j.bpm.toFixed(1);
+    els.conf.textContent   = (j.bpm_confidence == null) ? '-' : j.bpm_confidence.toFixed(2);
+    els.hr.textContent     = (j.hr_bpm == null) ? '— (얼굴 인식 필요)' : j.hr_bpm.toFixed(1);
     els.hrconf.textContent = (j.hr_confidence == null) ? '-' : j.hr_confidence.toFixed(2);
-    els.face.textContent = j.face_visible ? '✓' : '× (정면을 바라보세요)';
+    els.face.textContent   = j.face_visible ? '✓ 인식됨' : '✗ 정면 응시 필요';
+
     const zone = j.fp_zone || 'SAFE';
     els.fpzone.textContent = zone;
-    els.fpzone.className = 'badge badge-' + zone;
+    els.fpzone.className   = 'badge badge-' + zone;
+
     drawOverlay(j);
-    if (j.last_alert && j.last_alert !== lastAlertShown) {
-      lastAlertShown = j.last_alert;
-      els.alert.textContent = j.last_alert;
-      els.alert.classList.remove('hidden');
+
+    // One toast per fresh alert.
+    if (j.last_alert && j.last_alert_at) {
+      const key = j.last_alert_at + ':' + j.last_alert.slice(0, 30);
+      if (key !== lastAlertKey) {
+        lastAlertKey = key;
+        const kind = zone === 'DANGER' || j.state === 'CONFIRMED_FALL' ? ''
+                   : zone === 'WARNING' || j.state === 'SUSPECTED_FALL' ? 'warn'
+                   : 'info';
+        showToast(j.last_alert, kind);
+        refreshAlerts();
+      }
     }
   }
+
+  // Edges connecting landmarks for the skeleton overlay.
+  const BONES = [
+    ['left_shoulder', 'right_shoulder'],
+    ['left_shoulder', 'left_hip'],
+    ['right_shoulder', 'right_hip'],
+    ['left_hip', 'right_hip'],
+    ['nose', 'left_shoulder'],
+    ['nose', 'right_shoulder'],
+  ];
 
   function drawOverlay(j) {
     overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
-    // Fall-prevention danger lines — drawn first so the HR box sits above them.
+    // 1) Pose skeleton — shows the user that pose detection is working.
+    if (j.pose && j.pose.visibility_ok) {
+      const p = j.pose;
+      overlayCtx.lineWidth = 2;
+      overlayCtx.strokeStyle = 'rgba(79, 140, 255, 0.85)';
+      overlayCtx.beginPath();
+      for (const [a, b] of BONES) {
+        const pa = p[a], pb = p[b];
+        if (pa && pb) { overlayCtx.moveTo(pa[0], pa[1]); overlayCtx.lineTo(pb[0], pb[1]); }
+      }
+      overlayCtx.stroke();
+      overlayCtx.fillStyle = '#4f8cff';
+      for (const k of ['nose','left_shoulder','right_shoulder','left_hip','right_hip','left_eye','right_eye']) {
+        const pt = p[k];
+        if (!pt) continue;
+        overlayCtx.beginPath();
+        overlayCtx.arc(pt[0], pt[1], 3, 0, Math.PI * 2);
+        overlayCtx.fill();
+      }
+    }
+
+    // 2) Fall-prevention danger lines.
     if (j.fp_warning_y || j.fp_danger_y) {
       overlayCtx.setLineDash([6, 4]);
       overlayCtx.lineWidth = 2;
@@ -291,7 +579,7 @@
       overlayCtx.lineTo(overlay.width, j.fp_warning_y);
       overlayCtx.stroke();
       overlayCtx.fillStyle = '#e69138';
-      overlayCtx.font = '11px system-ui';
+      overlayCtx.font = 'bold 11px system-ui';
       overlayCtx.fillText('WARNING', 6, j.fp_warning_y - 4);
 
       overlayCtx.strokeStyle = '#d9534f';
@@ -305,17 +593,21 @@
       overlayCtx.setLineDash([]);
     }
 
-    // Hip marker — visualizes the y-coordinate the prevention detector watches.
-    if (j.fp_hip_y != null) {
+    // 3) Hip marker at the actual y-coord the prevention detector watches.
+    if (j.fp_hip_y != null && j.pose && j.pose.left_hip) {
+      const hipX = (j.pose.left_hip[0] + j.pose.right_hip[0]) / 2;
       const zoneColor = j.fp_zone === 'DANGER' ? '#d9534f'
                       : j.fp_zone === 'WARNING' ? '#e69138' : '#2db66d';
       overlayCtx.fillStyle = zoneColor;
       overlayCtx.beginPath();
-      overlayCtx.arc(overlay.width / 2, j.fp_hip_y, 6, 0, Math.PI * 2);
+      overlayCtx.arc(hipX, j.fp_hip_y, 7, 0, Math.PI * 2);
       overlayCtx.fill();
+      overlayCtx.lineWidth = 2;
+      overlayCtx.strokeStyle = 'white';
+      overlayCtx.stroke();
     }
 
-    // Heart-rate ROI (same resolution as the posted JPEG so coords map 1:1).
+    // 4) Heart-rate ROI box.
     if (j.hr_roi && j.hr_roi.length === 4) {
       const [x0, y0, x1, y1] = j.hr_roi;
       const conf = j.hr_confidence || 0;
@@ -323,7 +615,7 @@
       overlayCtx.lineWidth = 2;
       overlayCtx.strokeRect(x0, y0, x1 - x0, y1 - y0);
       overlayCtx.fillStyle = overlayCtx.strokeStyle;
-      overlayCtx.font = '12px system-ui';
+      overlayCtx.font = 'bold 11px system-ui';
       overlayCtx.fillText('HR ROI', x0, y0 - 4);
     }
   }
@@ -335,25 +627,34 @@
     }
   }
 
-  // Alert history poll. Runs from page load so a fresh browser also shows
-  // alerts that fired before this tab connected.
+  // --- alert history poll ---
   const alertList = document.getElementById('alerts');
+  const KIND_LABEL = {
+    'fall_confirmed':  '낙상 확정',
+    'fall_prevention': '낙상 예방',
+    'apnea':           '호흡 이상',
+    'test':            '테스트',
+  };
   async function refreshAlerts() {
     try {
       const r = await fetch('/alerts?limit=10');
       if (!r.ok) return;
       const { alerts: arr } = await r.json();
-      alertList.innerHTML = arr.length
-        ? arr.map(a => {
-            const color = a.kind === 'fall_confirmed' ? '#d9534f'
-                        : a.kind === 'fall_prevention' ? '#e69138'
-                        : a.kind === 'apnea' ? '#4f8cff' : '#888';
-            return `<li style="margin:6px 0; padding:6px 8px; border-left:3px solid ${color}; background:#1f232c; border-radius:3px;">
-              <div style="color:${color}; font-weight:600; font-size:11px;">${a.kind}  ·  ${a.iso}</div>
-              <div style="margin-top:2px; white-space:pre-wrap;">${a.msg.replace(/</g,'&lt;')}</div>
-            </li>`;
-          }).join('')
-        : '<li style="color:#666">(아직 발생한 알림 없음)</li>';
+      if (!arr.length) {
+        alertList.innerHTML = '<li style="border-left-color:transparent; color:var(--muted);">(아직 발생한 알림 없음)</li>';
+        return;
+      }
+      alertList.innerHTML = arr.map(a => {
+        const color = a.kind === 'fall_confirmed'  ? 'var(--red)'
+                    : a.kind === 'fall_prevention' ? 'var(--orange)'
+                    : a.kind === 'apnea'           ? 'var(--blue)'
+                    : a.kind === 'test'            ? 'var(--muted)'
+                    : 'var(--accent)';
+        return `<li style="border-left-color:${color}">
+          <div class="meta" style="color:${color}">${KIND_LABEL[a.kind] || a.kind} · ${a.iso}</div>
+          <div class="body">${a.msg.replace(/</g,'&lt;')}</div>
+        </li>`;
+      }).join('');
     } catch (e) { /* silent */ }
   }
   refreshAlerts();

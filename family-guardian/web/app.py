@@ -249,6 +249,23 @@ class Pipeline:
 
         self.prev_state = new_state
         self.frame_count += 1
+
+        # Expose pose landmarks so the UI can draw a skeleton overlay and the
+        # user can SEE that pose detection is actually working.
+        pose_payload = None
+        if pose is not None:
+            pose_payload = {
+                "visibility_ok": pose.visibility_ok,
+                "face_visibility_ok": pose.face_visibility_ok,
+                "nose": list(pose.nose),
+                "left_shoulder": list(pose.left_shoulder),
+                "right_shoulder": list(pose.right_shoulder),
+                "left_hip": list(pose.left_hip),
+                "right_hip": list(pose.right_hip),
+                "left_eye": list(pose.left_eye) if pose.left_eye else None,
+                "right_eye": list(pose.right_eye) if pose.right_eye else None,
+            }
+
         self.last_result = {
             "mode": self.mode,
             "state": new_state.value,
@@ -259,6 +276,7 @@ class Pipeline:
             "hr_confidence": hr_conf,
             "hr_roi": list(hr_roi) if hr_roi else None,
             "face_visible": pose.face_visibility_ok if pose is not None else False,
+            "pose": pose_payload,
             "fp_zone": fp_zone,
             "fp_hip_y": fp_hip_y,
             "fp_warning_y": fp_warning_y,
@@ -357,6 +375,29 @@ async def alerts(limit: int = 20) -> dict:
         return {"alerts": []}
     limit = max(1, min(limit, 100))
     return {"alerts": list(_pipeline.alerts)[:limit]}
+
+
+@app.post("/test-alert")
+async def test_alert() -> dict:
+    """Fire a synthetic alert through the full notifier + history chain.
+
+    Lets a demo viewer verify that Telegram / S3 / history wiring works
+    without having to actually fall down.
+    """
+    pipe = await get_pipeline_async()
+    now = time.time()
+    msg = (
+        f"🧪 테스트 알림 ({datetime.fromtimestamp(now).strftime('%Y-%m-%d %H:%M:%S')}) — "
+        "알림 채널이 정상 동작하는지 확인하기 위한 데모 메시지입니다."
+    )
+    try:
+        pipe.notifier.send(msg, video_path=None)
+    except Exception:  # noqa: BLE001
+        log.exception("test_alert notifier.send failed")
+    pipe._record_alert(msg, kind="test", ts=now)
+    pipe.last_alert = msg
+    pipe.last_alert_at = now
+    return {"ok": True, "msg": msg}
 
 
 @app.post("/frame")
