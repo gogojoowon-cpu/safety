@@ -25,6 +25,7 @@ import config
 from core.breathing_detector import BreathingDetector
 from core.event_state import State
 from core.fall_detector import FallDetector
+from core.fall_prevention import FallPreventionDetector
 from core.heart_rate_detector import HeartRateDetector
 from core.incident_recorder import IncidentRecorder
 from core.logger import get_logger
@@ -51,6 +52,11 @@ class Pipeline:
         # Heart-rate detector runs in BOTH modes — face landmarks are needed,
         # so it self-degrades to None when the user is not facing the camera.
         self.heart_rate = HeartRateDetector()
+
+        # Pre-fall warning based on hip y-coordinate vs configurable danger lines.
+        # Runs in both modes; fires alerts BEFORE the FallDetector state machine
+        # would have triggered, so caregivers can intervene early.
+        self.fall_prevention = FallPreventionDetector()
 
         self.mode: str = "elder"
         self.baby_rec: Optional[BabyRecorder] = None
@@ -138,6 +144,31 @@ class Pipeline:
         except Exception:  # noqa: BLE001
             log.exception("heart_rate.update failed")
 
+        fp_zone = "SAFE"
+        fp_hip_y: Optional[float] = None
+        fp_warning_y = 0.0
+        fp_danger_y = 0.0
+        fp_alert: Optional[str] = None
+        try:
+            fp_result = self.fall_prevention.update(
+                pose, frame_height=frame_bgr.shape[0], now=now
+            )
+            fp_zone = fp_result.zone.value
+            fp_hip_y = fp_result.hip_y
+            fp_warning_y = fp_result.warning_y
+            fp_danger_y = fp_result.danger_y
+            fp_alert = fp_result.alert
+        except Exception:  # noqa: BLE001
+            log.exception("fall_prevention.update failed")
+
+        if fp_alert:
+            try:
+                self.notifier.send(fp_alert, video_path=None)
+            except Exception:  # noqa: BLE001
+                log.exception("fall_prevention notifier.send failed")
+            self.last_alert = fp_alert
+            self.last_alert_at = now
+
         if self.mode == "baby":
             if self.baby_rec is not None:
                 try:
@@ -208,6 +239,10 @@ class Pipeline:
             "hr_confidence": hr_conf,
             "hr_roi": list(hr_roi) if hr_roi else None,
             "face_visible": pose.face_visibility_ok if pose is not None else False,
+            "fp_zone": fp_zone,
+            "fp_hip_y": fp_hip_y,
+            "fp_warning_y": fp_warning_y,
+            "fp_danger_y": fp_danger_y,
             "last_alert": self.last_alert,
             "last_alert_at": self.last_alert_at,
             "frame_count": self.frame_count,

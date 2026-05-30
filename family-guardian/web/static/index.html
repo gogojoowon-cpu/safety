@@ -48,9 +48,12 @@
       display: inline-block; padding: 3px 8px; border-radius: 4px;
       font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
     }
-    .badge-NORMAL { background: var(--green); }
-    .badge-SUSPECTED_FALL { background: var(--orange); }
-    .badge-CONFIRMED_FALL { background: var(--red); }
+    .badge-NORMAL,
+    .badge-SAFE { background: var(--green); }
+    .badge-SUSPECTED_FALL,
+    .badge-WARNING { background: var(--orange); }
+    .badge-CONFIRMED_FALL,
+    .badge-DANGER { background: var(--red); }
     .stat { font-size: 14px; line-height: 1.9; min-width: 280px; }
     .stat .k {
       color: var(--muted); display: inline-block; min-width: 110px;
@@ -95,6 +98,7 @@
       <div><span class="k">심박 BPM</span><span id="m-hr">-</span></div>
       <div><span class="k">심박 confidence</span><span id="m-hrconf">-</span></div>
       <div><span class="k">얼굴 인식</span><span id="m-face">-</span></div>
+      <div><span class="k">예방 구역</span><span id="m-fpzone" class="badge badge-NORMAL">SAFE</span></div>
       <div><span class="k">Frames sent</span><span id="m-frames">0</span></div>
       <div><span class="k">Sample FPS</span><span id="m-fps">0</span></div>
       <div id="alertbox" class="alert hidden"></div>
@@ -125,6 +129,7 @@
     hr:     document.getElementById('m-hr'),
     hrconf: document.getElementById('m-hrconf'),
     face:   document.getElementById('m-face'),
+    fpzone: document.getElementById('m-fpzone'),
     frames: document.getElementById('m-frames'),
     fps:    document.getElementById('m-fps'),
     alert:  document.getElementById('alertbox'),
@@ -204,6 +209,9 @@
     els.hr.textContent = (j.hr_bpm == null) ? '-' : j.hr_bpm.toFixed(1);
     els.hrconf.textContent = (j.hr_confidence == null) ? '-' : j.hr_confidence.toFixed(2);
     els.face.textContent = j.face_visible ? '✓' : '× (정면을 바라보세요)';
+    const zone = j.fp_zone || 'SAFE';
+    els.fpzone.textContent = zone;
+    els.fpzone.className = 'badge badge-' + zone;
     drawOverlay(j);
     if (j.last_alert && j.last_alert !== lastAlertShown) {
       lastAlertShown = j.last_alert;
@@ -214,8 +222,43 @@
 
   function drawOverlay(j) {
     overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
-    // Server processes at canvas resolution (cv.width × cv.height) and the
-    // overlay is the same size, so roi coordinates map 1:1.
+
+    // Fall-prevention danger lines — drawn first so the HR box sits above them.
+    if (j.fp_warning_y || j.fp_danger_y) {
+      overlayCtx.setLineDash([6, 4]);
+      overlayCtx.lineWidth = 2;
+
+      overlayCtx.strokeStyle = '#e69138';
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(0, j.fp_warning_y);
+      overlayCtx.lineTo(overlay.width, j.fp_warning_y);
+      overlayCtx.stroke();
+      overlayCtx.fillStyle = '#e69138';
+      overlayCtx.font = '11px system-ui';
+      overlayCtx.fillText('WARNING', 6, j.fp_warning_y - 4);
+
+      overlayCtx.strokeStyle = '#d9534f';
+      overlayCtx.beginPath();
+      overlayCtx.moveTo(0, j.fp_danger_y);
+      overlayCtx.lineTo(overlay.width, j.fp_danger_y);
+      overlayCtx.stroke();
+      overlayCtx.fillStyle = '#d9534f';
+      overlayCtx.fillText('DANGER', 6, j.fp_danger_y - 4);
+
+      overlayCtx.setLineDash([]);
+    }
+
+    // Hip marker — visualizes the y-coordinate the prevention detector watches.
+    if (j.fp_hip_y != null) {
+      const zoneColor = j.fp_zone === 'DANGER' ? '#d9534f'
+                      : j.fp_zone === 'WARNING' ? '#e69138' : '#2db66d';
+      overlayCtx.fillStyle = zoneColor;
+      overlayCtx.beginPath();
+      overlayCtx.arc(overlay.width / 2, j.fp_hip_y, 6, 0, Math.PI * 2);
+      overlayCtx.fill();
+    }
+
+    // Heart-rate ROI (same resolution as the posted JPEG so coords map 1:1).
     if (j.hr_roi && j.hr_roi.length === 4) {
       const [x0, y0, x1, y1] = j.hr_roi;
       const conf = j.hr_confidence || 0;
