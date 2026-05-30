@@ -24,13 +24,17 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import config
+from core.activity_classifier import Activity, classify as classify_activity
 from core.breathing_detector import BreathingDetector
+from core.cardiac_emergency_detector import CardiacEmergencyDetector, CardiacState
 from core.event_state import State
 from core.fall_detector import FallDetector
 from core.fall_prevention import FallPreventionDetector
 from core.heart_rate_detector import HeartRateDetector
+from core.inactivity_detector import InactivityDetector
 from core.incident_recorder import IncidentRecorder
 from core.logger import get_logger
+from core.motion_analyzer import MotionAnalyzer
 from core.pose_detector import PoseDetector
 from core.recorder import BabyRecorder
 from notifiers import build_notifier
@@ -59,6 +63,18 @@ class Pipeline:
         # Runs in both modes; fires alerts BEFORE the FallDetector state machine
         # would have triggered, so caregivers can intervene early.
         self.fall_prevention = FallPreventionDetector()
+
+        # Phone-camera safety stack: foundational motion signal + three
+        # composite detectors that consume it. Together they cover the safety
+        # blind spots between "instant fall" and "rPPG bio signals".
+        self.motion = MotionAnalyzer()
+        self.inactivity = InactivityDetector()
+        self.cardiac = CardiacEmergencyDetector()
+        # Breathing detector is created lazily per-mode but apnea detection is
+        # needed in both modes for cardiac suspicion, so we always keep an
+        # always-on instance whose results feed the cardiac detector even when
+        # the mode-specific `self.breathing` is None.
+        self.always_on_breathing = BreathingDetector()
 
         self.mode: str = "elder"
         self.baby_rec: Optional[BabyRecorder] = None
@@ -187,6 +203,65 @@ class Pipeline:
             self.last_alert_at = now
             self._record_alert(fp_alert, kind="fall_prevention", ts=now)
 
+        # ----- foundational signals (motion + activity) ------------------
+        motion_mag = 0.0
+        try:
+            motion_mag = self.motion.update(frame_bgr)
+        except Exception:  # noqa: BLE001
+            log.exception("motion.update failed")
+        activity = classify_activity(pose)
+
+        # ----- always-on apnea probe (drives cardiac detector) -----------
+        apnea_suspected = False
+        try:
+            br_always = self.always_on_breathing.update(frame_bgr, pose)
+            apnea_suspected = br_always.apnea_suspected
+        except Exception:  # noqa: BLE001
+            log.exception("always_on_breathing.update failed")
+
+        # ----- prolonged inactivity --------------------------------------
+        inactivity_alert: Optional[str] = None
+        inactivity_quiet_sec = 0.0
+        try:
+            inactivity_result = self.inactivity.update(motion_mag, now)
+            inactivity_alert = inactivity_result.alert
+            inactivity_quiet_sec = inactivity_result.quiet_seconds
+        except Exception:  # noqa: BLE001
+            log.exception("inactivity.update failed")
+        if inactivity_alert:
+            try:
+                self.notifier.send(inactivity_alert, video_path=None)
+            except Exception:  # noqa: BLE001
+                log.exception("inactivity notifier.send failed")
+            self.last_alert = inactivity_alert
+            self.last_alert_at = now
+            self._record_alert(inactivity_alert, kind="inactivity", ts=now)
+
+        # ----- cardiac emergency suspicion -------------------------------
+        cardiac_state_val = "NORMAL"
+        cardiac_immobile_sec = 0.0
+        cardiac_alert: Optional[str] = None
+        try:
+            cardiac_result = self.cardiac.update(
+                motion_magnitude=motion_mag,
+                apnea_suspected=apnea_suspected,
+                activity=activity,
+                now=now,
+            )
+            cardiac_state_val = cardiac_result.state.value
+            cardiac_immobile_sec = cardiac_result.immobile_seconds
+            cardiac_alert = cardiac_result.alert
+        except Exception:  # noqa: BLE001
+            log.exception("cardiac.update failed")
+        if cardiac_alert:
+            try:
+                self.notifier.send(cardiac_alert, video_path=self.last_confirmed_path)
+            except Exception:  # noqa: BLE001
+                log.exception("cardiac notifier.send failed")
+            self.last_alert = cardiac_alert
+            self.last_alert_at = now
+            self._record_alert(cardiac_alert, kind="cardiac_emergency", ts=now)
+
         if self.mode == "baby":
             if self.baby_rec is not None:
                 try:
@@ -281,6 +356,13 @@ class Pipeline:
             "fp_hip_y": fp_hip_y,
             "fp_warning_y": fp_warning_y,
             "fp_danger_y": fp_danger_y,
+            # Phone-camera safety stack
+            "motion_magnitude": motion_mag,
+            "activity": activity.value,
+            "apnea_suspected": apnea_suspected,
+            "inactivity_quiet_sec": inactivity_quiet_sec,
+            "cardiac_state": cardiac_state_val,
+            "cardiac_immobile_sec": cardiac_immobile_sec,
             "last_alert": self.last_alert,
             "last_alert_at": self.last_alert_at,
             "frame_count": self.frame_count,

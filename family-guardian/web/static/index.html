@@ -123,9 +123,13 @@
       display: inline-block; padding: 2px 8px; border-radius: 4px;
       font-size: 11px; font-weight: 700; letter-spacing: 0.03em;
     }
-    .badge-NORMAL, .badge-SAFE                  { background: var(--green);  color: white; }
-    .badge-SUSPECTED_FALL, .badge-WARNING       { background: var(--orange); color: white; }
-    .badge-CONFIRMED_FALL, .badge-DANGER        { background: var(--red);    color: white; }
+    .badge-NORMAL, .badge-SAFE                       { background: var(--green);  color: white; }
+    .badge-SUSPECTED_FALL, .badge-WARNING,
+    .badge-SUSPECTED                                 { background: var(--orange); color: white; }
+    .badge-CONFIRMED_FALL, .badge-DANGER,
+    .badge-EMERGENCY                                 { background: var(--red);    color: white; }
+    .badge-STANDING, .badge-SITTING, .badge-LYING    { background: #3b4255; color: white; }
+    .badge-UNKNOWN                                   { background: #555;    color: white; }
     .experimental {
       font-size: 10px; padding: 1px 5px; border-radius: 3px;
       background: rgba(230, 145, 56, 0.15); color: var(--orange);
@@ -233,8 +237,18 @@
       <span class="k">모드</span><span id="m-mode">-</span>
       <span class="k">낙상 상태</span><span><span id="m-state" class="badge badge-NORMAL">NORMAL</span></span>
       <span class="k">예방 구역</span><span><span id="m-fpzone" class="badge badge-SAFE">SAFE</span></span>
+      <span class="k">자세</span><span><span id="m-activity" class="badge badge-UNKNOWN">UNKNOWN</span></span>
       <span class="k">몸통 각도</span><span id="m-torso">-</span>
       <span class="k">얼굴 인식</span><span id="m-face">-</span>
+    </div>
+
+    <h2 style="margin-top:18px;">응급 의심 (결정론적 조합)</h2>
+    <div class="stat-grid">
+      <span class="k">심정지 의심</span><span><span id="m-cardiac" class="badge badge-NORMAL">NORMAL</span></span>
+      <span class="k">미동 지속</span><span id="m-immobile">0초</span>
+      <span class="k">호흡 정지 의심</span><span id="m-apnea">-</span>
+      <span class="k">장시간 미동</span><span id="m-inactivity">0초</span>
+      <span class="k">모션 강도</span><span id="m-motion">0.00</span>
     </div>
 
     <h2 style="margin-top:18px;">생체 신호 <span class="experimental">실험적 · rPPG</span></h2>
@@ -296,17 +310,23 @@
     4: document.getElementById('step-4'),
   };
   const els = {
-    mode:   document.getElementById('m-mode'),
-    state:  document.getElementById('m-state'),
-    torso:  document.getElementById('m-torso'),
-    bpm:    document.getElementById('m-bpm'),
-    conf:   document.getElementById('m-conf'),
-    hr:     document.getElementById('m-hr'),
-    hrconf: document.getElementById('m-hrconf'),
-    face:   document.getElementById('m-face'),
-    fpzone: document.getElementById('m-fpzone'),
-    frames: document.getElementById('m-frames'),
-    fps:    document.getElementById('m-fps'),
+    mode:       document.getElementById('m-mode'),
+    state:      document.getElementById('m-state'),
+    torso:      document.getElementById('m-torso'),
+    bpm:        document.getElementById('m-bpm'),
+    conf:       document.getElementById('m-conf'),
+    hr:         document.getElementById('m-hr'),
+    hrconf:     document.getElementById('m-hrconf'),
+    face:       document.getElementById('m-face'),
+    fpzone:     document.getElementById('m-fpzone'),
+    activity:   document.getElementById('m-activity'),
+    cardiac:    document.getElementById('m-cardiac'),
+    immobile:   document.getElementById('m-immobile'),
+    apnea:      document.getElementById('m-apnea'),
+    inactivity: document.getElementById('m-inactivity'),
+    motion:     document.getElementById('m-motion'),
+    frames:     document.getElementById('m-frames'),
+    fps:        document.getElementById('m-fps'),
   };
 
   let streaming = false;
@@ -333,6 +353,13 @@
     toast.textContent = msg;
     toast.className = (kind ? kind : '') + ' show';
     setTimeout(() => toast.classList.remove('show'), 6000);
+  }
+  function formatSeconds(s) {
+    if (s == null) return '-';
+    if (s < 60) return s.toFixed(0) + '초';
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return m + '분 ' + sec + '초';
   }
 
   // --- calibration ---
@@ -518,6 +545,18 @@
     els.fpzone.textContent = zone;
     els.fpzone.className   = 'badge badge-' + zone;
 
+    const act = j.activity || 'UNKNOWN';
+    els.activity.textContent = act;
+    els.activity.className   = 'badge badge-' + act;
+
+    const cardiac = j.cardiac_state || 'NORMAL';
+    els.cardiac.textContent = cardiac;
+    els.cardiac.className   = 'badge badge-' + cardiac;
+    els.immobile.textContent   = formatSeconds(j.cardiac_immobile_sec || 0);
+    els.apnea.textContent      = j.apnea_suspected ? '✓ 의심' : '✗ 정상';
+    els.inactivity.textContent = formatSeconds(j.inactivity_quiet_sec || 0);
+    els.motion.textContent     = (j.motion_magnitude || 0).toFixed(2);
+
     drawOverlay(j);
 
     // One toast per fresh alert.
@@ -630,10 +669,12 @@
   // --- alert history poll ---
   const alertList = document.getElementById('alerts');
   const KIND_LABEL = {
-    'fall_confirmed':  '낙상 확정',
-    'fall_prevention': '낙상 예방',
-    'apnea':           '호흡 이상',
-    'test':            '테스트',
+    'fall_confirmed':    '낙상 확정',
+    'fall_prevention':   '낙상 예방',
+    'cardiac_emergency': '응급 의심',
+    'inactivity':        '장시간 미동',
+    'apnea':             '호흡 이상',
+    'test':              '테스트',
   };
   async function refreshAlerts() {
     try {
@@ -645,10 +686,12 @@
         return;
       }
       alertList.innerHTML = arr.map(a => {
-        const color = a.kind === 'fall_confirmed'  ? 'var(--red)'
-                    : a.kind === 'fall_prevention' ? 'var(--orange)'
-                    : a.kind === 'apnea'           ? 'var(--blue)'
-                    : a.kind === 'test'            ? 'var(--muted)'
+        const color = a.kind === 'cardiac_emergency' ? 'var(--red)'
+                    : a.kind === 'fall_confirmed'    ? 'var(--red)'
+                    : a.kind === 'inactivity'        ? 'var(--orange)'
+                    : a.kind === 'fall_prevention'   ? 'var(--orange)'
+                    : a.kind === 'apnea'             ? 'var(--blue)'
+                    : a.kind === 'test'              ? 'var(--muted)'
                     : 'var(--accent)';
         return `<li style="border-left-color:${color}">
           <div class="meta" style="color:${color}">${KIND_LABEL[a.kind] || a.kind} · ${a.iso}</div>
