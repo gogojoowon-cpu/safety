@@ -17,6 +17,7 @@ class PoseFrame:
     """단일 프레임에서 뽑은 키포인트.
 
     좌표는 픽셀 단위. ``visibility_ok=False`` 면 다운스트림은 이 프레임을 무시한다.
+    ``left_eye`` / ``right_eye`` 는 심박 추정 ROI(이마) 산출에 사용된다.
     """
     nose: Point
     left_shoulder: Point
@@ -25,6 +26,9 @@ class PoseFrame:
     right_hip: Point
     visibility_ok: bool
     timestamp: float
+    left_eye: Optional[Point] = None
+    right_eye: Optional[Point] = None
+    face_visibility_ok: bool = False
 
     @property
     def shoulder_mid(self) -> Point:
@@ -103,6 +107,13 @@ class PoseDetector:
         ]
         visibility_ok = all(vis(i) > self._MIN_VISIBILITY for i in key_indices)
 
+        face_visibility_ok = (
+            vis(LM.LEFT_EYE) > self._MIN_VISIBILITY
+            and vis(LM.RIGHT_EYE) > self._MIN_VISIBILITY
+        )
+        left_eye = pt(LM.LEFT_EYE) if face_visibility_ok else None
+        right_eye = pt(LM.RIGHT_EYE) if face_visibility_ok else None
+
         return PoseFrame(
             nose=pt(LM.NOSE),
             left_shoulder=pt(LM.LEFT_SHOULDER),
@@ -111,6 +122,9 @@ class PoseDetector:
             right_hip=pt(LM.RIGHT_HIP),
             visibility_ok=visibility_ok,
             timestamp=timestamp,
+            left_eye=left_eye,
+            right_eye=right_eye,
+            face_visibility_ok=face_visibility_ok,
         )
 
     def close(self) -> None:

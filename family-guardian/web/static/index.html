@@ -73,7 +73,11 @@
 
   <div class="row">
     <div class="panel">
-      <video id="vid" width="480" height="360" autoplay playsinline muted></video>
+      <div style="position:relative; width:480px; max-width:100%">
+        <video id="vid" width="480" height="360" autoplay playsinline muted></video>
+        <canvas id="overlay" width="480" height="360"
+                style="position:absolute; inset:0; pointer-events:none"></canvas>
+      </div>
       <canvas id="cv" width="480" height="360" style="display:none"></canvas>
       <div>
         <button id="btn-start">카메라 시작</button>
@@ -86,8 +90,11 @@
       <div><span class="k">Mode</span><span id="m-mode">-</span></div>
       <div><span class="k">State</span><span id="m-state" class="badge badge-NORMAL">NORMAL</span></div>
       <div><span class="k">Torso angle</span><span id="m-torso">-</span></div>
-      <div><span class="k">BPM</span><span id="m-bpm">-</span></div>
-      <div><span class="k">Confidence</span><span id="m-conf">-</span></div>
+      <div><span class="k">호흡 BPM</span><span id="m-bpm">-</span></div>
+      <div><span class="k">호흡 confidence</span><span id="m-conf">-</span></div>
+      <div><span class="k">심박 BPM</span><span id="m-hr">-</span></div>
+      <div><span class="k">심박 confidence</span><span id="m-hrconf">-</span></div>
+      <div><span class="k">얼굴 인식</span><span id="m-face">-</span></div>
       <div><span class="k">Frames sent</span><span id="m-frames">0</span></div>
       <div><span class="k">Sample FPS</span><span id="m-fps">0</span></div>
       <div id="alertbox" class="alert hidden"></div>
@@ -104,6 +111,8 @@
   const vid = document.getElementById('vid');
   const cv = document.getElementById('cv');
   const ctx = cv.getContext('2d');
+  const overlay = document.getElementById('overlay');
+  const overlayCtx = overlay.getContext('2d');
   const btnStart = document.getElementById('btn-start');
   const btnElder = document.getElementById('btn-elder');
   const btnBaby  = document.getElementById('btn-baby');
@@ -113,6 +122,9 @@
     torso:  document.getElementById('m-torso'),
     bpm:    document.getElementById('m-bpm'),
     conf:   document.getElementById('m-conf'),
+    hr:     document.getElementById('m-hr'),
+    hrconf: document.getElementById('m-hrconf'),
+    face:   document.getElementById('m-face'),
     frames: document.getElementById('m-frames'),
     fps:    document.getElementById('m-fps'),
     alert:  document.getElementById('alertbox'),
@@ -189,10 +201,30 @@
     els.torso.textContent = (j.torso_deg == null) ? '-' : (j.torso_deg.toFixed(1) + '°');
     els.bpm.textContent = (j.bpm == null) ? '-' : j.bpm.toFixed(1);
     els.conf.textContent = (j.bpm_confidence == null) ? '-' : j.bpm_confidence.toFixed(2);
+    els.hr.textContent = (j.hr_bpm == null) ? '-' : j.hr_bpm.toFixed(1);
+    els.hrconf.textContent = (j.hr_confidence == null) ? '-' : j.hr_confidence.toFixed(2);
+    els.face.textContent = j.face_visible ? '✓' : '× (정면을 바라보세요)';
+    drawOverlay(j);
     if (j.last_alert && j.last_alert !== lastAlertShown) {
       lastAlertShown = j.last_alert;
       els.alert.textContent = j.last_alert;
       els.alert.classList.remove('hidden');
+    }
+  }
+
+  function drawOverlay(j) {
+    overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+    // Server processes at canvas resolution (cv.width × cv.height) and the
+    // overlay is the same size, so roi coordinates map 1:1.
+    if (j.hr_roi && j.hr_roi.length === 4) {
+      const [x0, y0, x1, y1] = j.hr_roi;
+      const conf = j.hr_confidence || 0;
+      overlayCtx.strokeStyle = conf > 0.3 ? '#2db66d' : '#e69138';
+      overlayCtx.lineWidth = 2;
+      overlayCtx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      overlayCtx.fillStyle = overlayCtx.strokeStyle;
+      overlayCtx.font = '12px system-ui';
+      overlayCtx.fillText('HR ROI', x0, y0 - 4);
     }
   }
 

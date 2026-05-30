@@ -25,6 +25,7 @@ import config
 from core.breathing_detector import BreathingDetector
 from core.event_state import State
 from core.fall_detector import FallDetector
+from core.heart_rate_detector import HeartRateDetector
 from core.incident_recorder import IncidentRecorder
 from core.logger import get_logger
 from core.pose_detector import PoseDetector
@@ -46,6 +47,10 @@ class Pipeline:
         self.notifier = build_notifier()
         self.uploader = CloudUploader()
         self.lock = asyncio.Lock()
+
+        # Heart-rate detector runs in BOTH modes — face landmarks are needed,
+        # so it self-degrades to None when the user is not facing the camera.
+        self.heart_rate = HeartRateDetector()
 
         self.mode: str = "elder"
         self.baby_rec: Optional[BabyRecorder] = None
@@ -122,6 +127,17 @@ class Pipeline:
         bpm_conf: Optional[float] = None
         apnea_msg: Optional[str] = None
 
+        hr_bpm: Optional[float] = None
+        hr_conf: Optional[float] = None
+        hr_roi: Optional[tuple] = None
+        try:
+            hr_result = self.heart_rate.update(frame_bgr, pose)
+            hr_bpm = hr_result.bpm
+            hr_conf = hr_result.confidence
+            hr_roi = hr_result.roi
+        except Exception:  # noqa: BLE001
+            log.exception("heart_rate.update failed")
+
         if self.mode == "baby":
             if self.baby_rec is not None:
                 try:
@@ -188,6 +204,10 @@ class Pipeline:
             "torso_deg": torso_deg,
             "bpm": bpm,
             "bpm_confidence": bpm_conf,
+            "hr_bpm": hr_bpm,
+            "hr_confidence": hr_conf,
+            "hr_roi": list(hr_roi) if hr_roi else None,
+            "face_visible": pose.face_visibility_ok if pose is not None else False,
             "last_alert": self.last_alert,
             "last_alert_at": self.last_alert_at,
             "frame_count": self.frame_count,
