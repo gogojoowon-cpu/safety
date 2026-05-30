@@ -64,6 +64,27 @@ def test_cooldown_suppresses_repeat_alert():
     assert second.alert is None  # cooldown active
 
 
+def test_set_lines_override_takes_effect():
+    det = FallPreventionDetector()
+    # Without override, hip_y=240 is WARNING (between 220 and 280).
+    res = det.update(_pose_with_hip_y(240.0, t=0.0), frame_height=FRAME_H, now=0.0)
+    assert res.zone == Zone.WARNING
+
+    # Move the lines so 240 is now SAFE.
+    det.set_lines(warning_y=300.0, danger_y=360.0)
+    res = det.update(_pose_with_hip_y(240.0, t=1.0), frame_height=FRAME_H, now=1.0)
+    assert res.zone == Zone.SAFE
+    assert res.warning_y == 300.0
+    assert res.danger_y == 360.0
+
+
+def test_set_lines_rejects_inverted_order():
+    det = FallPreventionDetector()
+    import pytest
+    with pytest.raises(ValueError):
+        det.set_lines(warning_y=300.0, danger_y=200.0)
+
+
 def test_alert_fires_again_after_cooldown():
     det = FallPreventionDetector()
     det.update(_pose_with_hip_y(100.0, t=0.0), frame_height=FRAME_H, now=0.0)

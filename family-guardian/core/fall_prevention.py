@@ -52,8 +52,31 @@ class FallPreventionDetector:
         self._zone: Zone = Zone.SAFE
         self._last_alert_at: float = -math.inf
         self._frame_height: Optional[int] = None
+        self._override_warning_y: Optional[float] = None
+        self._override_danger_y: Optional[float] = None
+
+    def set_lines(self, warning_y: float, danger_y: float) -> None:
+        """Override the warning / danger y-coordinates explicitly (UI calibration).
+
+        Pass two pixel y-values (image coordinate system, y=0 at top).
+        Raises ValueError if the danger line isn't strictly below the warning line.
+        """
+        if not warning_y < danger_y:
+            raise ValueError(
+                f"warning_y ({warning_y}) must be strictly less than danger_y ({danger_y})"
+            )
+        self._override_warning_y = float(warning_y)
+        self._override_danger_y = float(danger_y)
+        log.info("Fall prevention lines overridden: warning=%.1f danger=%.1f",
+                 warning_y, danger_y)
+
+    def clear_overrides(self) -> None:
+        self._override_warning_y = None
+        self._override_danger_y = None
 
     def _lines_for(self, frame_height: int) -> tuple[float, float]:
+        if self._override_warning_y is not None and self._override_danger_y is not None:
+            return self._override_warning_y, self._override_danger_y
         return (
             frame_height * config.FALL_PREVENTION_WARNING_Y_RATIO,
             frame_height * config.FALL_PREVENTION_DANGER_Y_RATIO,

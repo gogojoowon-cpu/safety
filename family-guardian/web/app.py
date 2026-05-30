@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
+from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Deque, Optional
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -68,6 +70,8 @@ class Pipeline:
         self.last_alert_at: float = 0.0
         self.last_result: dict = {}
         self.frame_count: int = 0
+        # Rolling history of recent alerts shown in the UI. Most recent first.
+        self.alerts: Deque[dict] = deque(maxlen=20)
 
         initial = config.MODE if config.MODE in ("elder", "baby") else "elder"
         self._configure_mode(initial)
@@ -108,6 +112,19 @@ class Pipeline:
         self.fall = FallDetector(frame_height=config.FRAME_HEIGHT)
         self.prev_state = State.NORMAL
         log.info("Pipeline mode set to %s", mode)
+
+    def set_danger_zones(self, warning_y: float, danger_y: float) -> None:
+        """Manually override the fall-prevention warning/danger y-coordinates."""
+        self.fall_prevention.set_lines(warning_y, danger_y)
+
+    def _record_alert(self, msg: str, kind: str, ts: float) -> None:
+        """Push an alert onto the rolling history shown by /alerts."""
+        self.alerts.appendleft({
+            "kind": kind,
+            "msg": msg,
+            "ts": ts,
+            "iso": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S"),
+        })
 
     async def process(self, frame_bgr: np.ndarray) -> dict:
         async with self.lock:
@@ -168,6 +185,7 @@ class Pipeline:
                 log.exception("fall_prevention notifier.send failed")
             self.last_alert = fp_alert
             self.last_alert_at = now
+            self._record_alert(fp_alert, kind="fall_prevention", ts=now)
 
         if self.mode == "baby":
             if self.baby_rec is not None:
@@ -222,10 +240,12 @@ class Pipeline:
                 log.exception("fall notifier.send failed")
             self.last_alert = alert_msg
             self.last_alert_at = now
+            self._record_alert(alert_msg, kind="fall_confirmed", ts=now)
             self.last_confirmed_path = None
         elif apnea_msg:
             self.last_alert = apnea_msg
             self.last_alert_at = now
+            self._record_alert(apnea_msg, kind="apnea", ts=now)
 
         self.prev_state = new_state
         self.frame_count += 1
@@ -307,6 +327,36 @@ async def set_mode(mode: str) -> dict:
     async with pipe.lock:
         pipe._configure_mode(mode_l)
     return {"ok": True, "mode": mode_l}
+
+
+@app.post("/zone")
+async def set_zone(body: dict = Body(...)) -> dict:
+    """Override the fall-prevention warning/danger y-lines.
+
+    Expected body: {"warning_y": float, "danger_y": float} in pixel coordinates
+    of the frame the client is uploading (y=0 at top).
+    """
+    try:
+        warning_y = float(body["warning_y"])
+        danger_y = float(body["danger_y"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"warning_y and danger_y required: {exc}")
+
+    pipe = await get_pipeline_async()
+    try:
+        async with pipe.lock:
+            pipe.set_danger_zones(warning_y, danger_y)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"ok": True, "warning_y": warning_y, "danger_y": danger_y}
+
+
+@app.get("/alerts")
+async def alerts(limit: int = 20) -> dict:
+    if _pipeline is None:
+        return {"alerts": []}
+    limit = max(1, min(limit, 100))
+    return {"alerts": list(_pipeline.alerts)[:limit]}
 
 
 @app.post("/frame")

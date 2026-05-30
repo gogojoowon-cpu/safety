@@ -79,13 +79,18 @@
       <div style="position:relative; width:480px; max-width:100%">
         <video id="vid" width="480" height="360" autoplay playsinline muted></video>
         <canvas id="overlay" width="480" height="360"
-                style="position:absolute; inset:0; pointer-events:none"></canvas>
+                style="position:absolute; inset:0; cursor:crosshair"></canvas>
       </div>
       <canvas id="cv" width="480" height="360" style="display:none"></canvas>
       <div>
         <button id="btn-start">카메라 시작</button>
         <button id="btn-elder" class="active">elder</button>
         <button id="btn-baby">baby</button>
+      </div>
+      <div style="margin-top:6px">
+        <button id="btn-set-warning">WARNING 라인 설정</button>
+        <button id="btn-set-danger">DANGER 라인 설정</button>
+        <span id="calib-hint" style="color:var(--muted); font-size:12px; margin-left:6px"></span>
       </div>
     </div>
 
@@ -102,6 +107,11 @@
       <div><span class="k">Frames sent</span><span id="m-frames">0</span></div>
       <div><span class="k">Sample FPS</span><span id="m-fps">0</span></div>
       <div id="alertbox" class="alert hidden"></div>
+    </div>
+
+    <div class="panel" style="min-width:280px">
+      <h3 style="margin:0 0 8px; font-size:14px;">Alert history</h3>
+      <ul id="alerts" style="list-style:none; padding:0; margin:0; max-height:360px; overflow-y:auto; font-size:12px;"></ul>
     </div>
   </div>
 
@@ -141,6 +151,53 @@
   let windowStart = performance.now();
   let windowFrames = 0;
   let lastAlertShown = '';
+
+  // Zone calibration state — null when not calibrating.
+  let calibTarget = null;            // 'warning' | 'danger' | null
+  const pendingZones = { warning_y: null, danger_y: null };
+  const calibHint = document.getElementById('calib-hint');
+  const btnSetWarning = document.getElementById('btn-set-warning');
+  const btnSetDanger  = document.getElementById('btn-set-danger');
+
+  function setCalibTarget(t) {
+    calibTarget = t;
+    if (t === 'warning') calibHint.textContent = '비디오를 클릭해 WARNING 라인 지정';
+    else if (t === 'danger') calibHint.textContent = '비디오를 클릭해 DANGER 라인 지정';
+    else calibHint.textContent = '';
+    btnSetWarning.classList.toggle('active', t === 'warning');
+    btnSetDanger.classList.toggle('active', t === 'danger');
+  }
+
+  btnSetWarning.addEventListener('click', () => setCalibTarget(calibTarget === 'warning' ? null : 'warning'));
+  btnSetDanger.addEventListener('click',  () => setCalibTarget(calibTarget === 'danger'  ? null : 'danger'));
+
+  overlay.addEventListener('click', async (e) => {
+    if (!calibTarget) return;
+    const rect = overlay.getBoundingClientRect();
+    const y = (e.clientY - rect.top) * (overlay.height / rect.height);
+    if (calibTarget === 'warning') pendingZones.warning_y = y;
+    else pendingZones.danger_y = y;
+    setCalibTarget(null);
+
+    // Once both lines are set, push to the server.
+    if (pendingZones.warning_y != null && pendingZones.danger_y != null) {
+      if (pendingZones.warning_y >= pendingZones.danger_y) {
+        calibHint.textContent = '⚠️ WARNING 은 DANGER 보다 위(작은 y)에 있어야 합니다';
+        return;
+      }
+      try {
+        const r = await fetch('/zone', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(pendingZones),
+        });
+        if (r.ok) calibHint.textContent = '✓ 위험선 저장됨';
+        else calibHint.textContent = '저장 실패: ' + (await r.text());
+      } catch (err) {
+        calibHint.textContent = '저장 실패: ' + err.message;
+      }
+    }
+  });
 
   btnStart.addEventListener('click', async () => {
     try {
@@ -277,6 +334,30 @@
       await new Promise(r => setTimeout(r, 150));
     }
   }
+
+  // Alert history poll. Runs from page load so a fresh browser also shows
+  // alerts that fired before this tab connected.
+  const alertList = document.getElementById('alerts');
+  async function refreshAlerts() {
+    try {
+      const r = await fetch('/alerts?limit=10');
+      if (!r.ok) return;
+      const { alerts: arr } = await r.json();
+      alertList.innerHTML = arr.length
+        ? arr.map(a => {
+            const color = a.kind === 'fall_confirmed' ? '#d9534f'
+                        : a.kind === 'fall_prevention' ? '#e69138'
+                        : a.kind === 'apnea' ? '#4f8cff' : '#888';
+            return `<li style="margin:6px 0; padding:6px 8px; border-left:3px solid ${color}; background:#1f232c; border-radius:3px;">
+              <div style="color:${color}; font-weight:600; font-size:11px;">${a.kind}  ·  ${a.iso}</div>
+              <div style="margin-top:2px; white-space:pre-wrap;">${a.msg.replace(/</g,'&lt;')}</div>
+            </li>`;
+          }).join('')
+        : '<li style="color:#666">(아직 발생한 알림 없음)</li>';
+    } catch (e) { /* silent */ }
+  }
+  refreshAlerts();
+  setInterval(refreshAlerts, 3000);
 })();
 </script>
 </body>
